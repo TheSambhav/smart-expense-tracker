@@ -4,214 +4,108 @@ import { db } from "@/db";
 import { transactions, categories, merchants } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
-import { eq, and, sql, desc, sum, count, avg, gte, lte, ilike } from "drizzle-orm";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { eq, and, sql, desc, gte, lte, sum, avg, count } from "drizzle-orm";
 
-interface ParsedQuery {
-  intent: "sum" | "count" | "max" | "min" | "avg" | "breakdown" | "list" | "info" | "greeting";
-  type?: "INCOME" | "EXPENSE";
-  month?: number;
-  year?: number;
-  category?: string;
-  merchant?: string;
-  paymentMethod?: string;
-  timeframe?: "last_month" | "this_month" | "this_year" | "last_30_days";
-}
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GENERATIVE_AI_API_KEY!);
 
-function parseQuery(query: string): ParsedQuery {
-  const lower = query.toLowerCase();
-  const parsed: ParsedQuery = { intent: "list" };
-
-  // 1. Social/Info Intents
-  if (lower.match(/^(hi|hello|hey|greetings)/)) return { intent: "greeting" };
-  if (lower.includes("what can you do") || lower.includes("help") || lower.includes("commands")) return { intent: "info" };
-  if (lower.includes("thank")) return { intent: "greeting" };
-
-  // 2. Main Intent detection
-  if (lower.includes("how much") || lower.includes("total") || lower.includes("sum") || lower.includes("spend")) {
-    parsed.intent = "sum";
-  }
-  if (lower.includes("how many") || lower.includes("count") || lower.includes("number of")) {
-    parsed.intent = "count";
-  }
-  if (lower.includes("highest") || lower.includes("max") || lower.includes("most expensive") || lower.includes("biggest") || lower.includes("top")) {
-    parsed.intent = "max";
-  }
-  if (lower.includes("lowest") || lower.includes("min") || lower.includes("cheapest") || lower.includes("smallest")) {
-    parsed.intent = "min";
-  }
-  if (lower.includes("average") || lower.includes("avg") || lower.includes("mean")) {
-    parsed.intent = "avg";
-  }
-  if (lower.includes("breakdown") || lower.includes("distribution") || lower.includes("stats") || lower.includes("summary")) {
-    parsed.intent = "breakdown";
-  }
-
-  // 3. Type detection (Income vs Expense)
-  if (lower.includes("income") || lower.includes("earn") || lower.includes("salary") || lower.includes("received")) {
-    parsed.type = "INCOME";
-    parsed.intent = parsed.intent === "list" ? "sum" : parsed.intent; // Default to sum for income queries
-  } else if (lower.includes("expense") || lower.includes("spent") || lower.includes("paid")) {
-    parsed.type = "EXPENSE";
-  }
-
-  // 4. Timeframe detection
-  if (lower.includes("last month")) parsed.timeframe = "last_month";
-  else if (lower.includes("this month")) parsed.timeframe = "this_month";
-  else if (lower.includes("this year")) parsed.timeframe = "this_year";
-  else if (lower.includes("last 30 days")) parsed.timeframe = "last_30_days";
-
-  // 5. Month detection
-  const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-  months.forEach((m, idx) => {
-    if (lower.includes(m) || lower.includes(m.substring(0, 3))) parsed.month = idx + 1;
-  });
-
-  // 6. Year detection
-  const yearMatch = query.match(/\b(20\d{2})\b/);
-  if (yearMatch) parsed.year = parseInt(yearMatch[1], 10);
-
-  // 7. Payment Method
-  if (lower.includes("card")) parsed.paymentMethod = "card";
-  if (lower.includes("upi") || lower.includes("gpay") || lower.includes("phonepe")) parsed.paymentMethod = "upi";
-  if (lower.includes("cash")) parsed.paymentMethod = "cash";
-
-  // 8. Extract potential Category/Merchant name (words of 3+ letters)
-  const words = lower.split(/\s+/).filter(w => w.length > 3 && !["total", "spend", "much", "show", "this", "last"].includes(w));
-  if (words.length > 0) parsed.category = words[words.length - 1]; // Take the last relevant word as a hint
-
-  return parsed;
-}
+// Based on the diagnostic list, gemini-2.5-flash is the current supported model
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 export async function processChatQuery(query: string) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) throw new Error("Unauthorized");
-  
   const userId = session.user.id;
-  const parsed = parseQuery(query);
-
-  // Handle Social/Info Responses immediately
-  if (parsed.intent === "greeting") {
-    return { answer: "Hello! I'm here to help you track your finances. Ask me about your spending, income, or a breakdown of your categories!" };
-  }
-  if (parsed.intent === "info") {
-    return { answer: "I can help with:\n• 'Total spend this month'\n• 'How much did I earn in March?'\n• 'Highest spend on Food'\n• 'Breakdown by category'\n• 'Recent transactions'" };
-  }
-
-  let condition = eq(transactions.userId, userId);
-
-  // Apply Filters
-  if (parsed.type) condition = and(condition, eq(transactions.type, parsed.type)) as any;
-  if (parsed.paymentMethod) condition = and(condition, ilike(transactions.paymentMethod, `%${parsed.paymentMethod}%`)) as any;
-
-  // Timeframes
-  const now = new Date();
-  if (parsed.timeframe === "last_month") {
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const end = new Date(now.getFullYear(), now.getMonth(), 0);
-    condition = and(condition, gte(transactions.date, start), lte(transactions.date, end)) as any;
-  } else if (parsed.timeframe === "this_month") {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    condition = and(condition, gte(transactions.date, start)) as any;
-  } else if (parsed.timeframe === "this_year") {
-    const start = new Date(now.getFullYear(), 0, 1);
-    condition = and(condition, gte(transactions.date, start)) as any;
-  }
-
-  if (parsed.month && !parsed.timeframe) condition = and(condition, sql`EXTRACT(MONTH FROM ${transactions.date}) = ${parsed.month}`) as any;
-  if (parsed.year && !parsed.timeframe) condition = and(condition, sql`EXTRACT(YEAR FROM ${transactions.date}) = ${parsed.year}`) as any;
-  
-  // Advanced Category/Merchant Lookup
-  if (parsed.category) {
-    // Check Categories first
-    const cat = await db.query.categories.findFirst({
-      where: (c, { ilike, and, eq }) => and(ilike(c.name, `%${parsed.category}%`), eq(c.userId, userId))
-    });
-    if (cat) {
-      condition = and(condition, eq(transactions.categoryId, cat.id)) as any;
-    } else {
-      // Check Merchants
-      const merch = await db.query.merchants.findFirst({
-        where: (m, { ilike }) => ilike(m.name, `%${parsed.category}%`)
-      });
-      if (merch) condition = and(condition, eq(transactions.merchantId, merch.id)) as any;
-    }
-  }
 
   try {
-    switch (parsed.intent) {
-      case "sum": {
-        const res = await db.select({ total: sum(transactions.amount) }).from(transactions).where(condition);
-        const total = Number(res[0].total || 0);
-        return {
-          answer: `The ${parsed.type === "INCOME" ? "total income" : "total spend"} is ₹${total.toLocaleString('en-IN')}.`,
-          data: { total }
-        };
-      }
-      case "avg": {
-        const res = await db.select({ val: avg(transactions.amount) }).from(transactions).where(condition);
-        const val = Number(res[0].val || 0);
-        return {
-          answer: `The average amount is ₹${val.toLocaleString('en-IN')}.`,
-          data: { average: val }
-        };
-      }
-      case "max":
-      case "min": {
-        const res = await db.select({
-          amount: transactions.amount,
-          merchant: merchants.name,
-          date: transactions.date,
-          desc: transactions.description
-        })
-        .from(transactions)
-        .leftJoin(merchants, eq(transactions.merchantId, merchants.id))
-        .where(condition)
-        .orderBy(parsed.intent === "max" ? desc(transactions.amount) : transactions.amount)
-        .limit(1);
+    // 1. The "Fully AI" SQL Generation Step
+    const systemPrompt = `
+      You are a PostgreSQL Expert. Use this EXACT Physical Table Schema:
 
-        if (res.length > 0) {
-          return {
-            answer: `The ${parsed.intent === "max" ? "highest" : "lowest"} amount was ₹${Number(res[0].amount).toLocaleString('en-IN')} at ${res[0].merchant || res[0].desc || 'Unknown'} on ${new Date(res[0].date).toLocaleDateString()}.`,
-            data: res[0]
-          };
-        }
-        return { answer: "I couldn't find any transactions for that query." };
-      }
-      case "breakdown": {
-        const res = await db.select({
-          name: categories.name,
-          total: sum(transactions.amount)
-        })
-        .from(transactions)
-        .leftJoin(categories, eq(transactions.categoryId, categories.id))
-        .where(condition)
-        .groupBy(categories.id, categories.name)
-        .orderBy(desc(sum(transactions.amount)))
-        .limit(8);
+      - transactions (snake_case columns): 
+        * id, user_id, amount, description, date, payment_method, notes, external_id, created_at, updated_at
+        * type: varchar ('INCOME' or 'EXPENSE')
+        * transaction_type: varchar ('debit' for expense, 'credit' for income)
+        * is_recurring: varchar ('Yes', 'No')
+        * weekday: varchar (e.g., 'Monday', 'Tuesday')
+        * category_id, merchant_id (JOIN these for names)
 
-        if (res.length === 0) return { answer: "No data to break down." };
-        const list = res.map(r => `• ${r.name || 'Uncategorized'}: ₹${Number(r.total).toLocaleString('en-IN')}`).join("\n");
-        return { answer: `Here is the breakdown:\n${list}`, data: res };
-      }
-      default: {
-        const res = await db.select({
-          amount: transactions.amount,
-          date: transactions.date,
-          merchant: merchants.name,
-          desc: transactions.description
-        })
-        .from(transactions)
-        .leftJoin(merchants, eq(transactions.merchantId, merchants.id))
-        .where(condition)
-        .orderBy(desc(transactions.date))
-        .limit(5);
+      - categories: id, name, icon, color, user_id, is_default
+      - merchants: id, name
 
-        if (res.length === 0) return { answer: "I found no matching transactions." };
-        const list = res.map(r => `₹${Number(r.amount).toLocaleString('en-IN')} - ${r.merchant || r.desc || 'Unknown'} (${new Date(r.date).toLocaleDateString()})`).join("\n");
-        return { answer: `Here are the results:\n${list}`, data: res };
-      }
+      Current User ID: "${userId}"
+      Current Date: ${new Date().toISOString().split('T')[0]} (YYYY-MM-DD)
+
+      Task: Write a valid PostgreSQL SELECT query to answer the user's question.
+      Rules:
+      1. ALWAYS filter by transactions.user_id = '${userId}'.
+      2. Use 'ilike' for string matches.
+      3. Return ONLY the SQL query. NO EXPLANATION.
+      4. For currency, use SUM(transactions.amount).
+      5. SEARCH STRATEGY: Descriptions follow 'Merchant - Subcategory' (e.g. 'Zomato - Fast Food'). If the user asks for specific types (medicine, coffee, metro, cashback, salary), search BOTH transactions.description AND categories.name AND merchants.name using ILIKE.
+      6. DATA MAPPING: 'credit' or 'INCOME' = money received. 'debit' or 'EXPENSE' = money spent.
+      7. Check transactions.payment_method for 'UPI', 'Wallet', 'Card', 'Cash'.
+      8. Check transactions.is_recurring = 'Yes' for subscriptions.
+      9. YEAR ASSUMPTION: If no year is mentioned, search ALL years.
+    `;
+
+    const aiExtraction = await model.generateContent([systemPrompt, query]);
+    const rawText = aiExtraction.response.text();
+
+    // Robust extraction: Find the first SELECT and end at the last semicolon or end of block
+    const sqlMatch = rawText.match(/SELECT[\s\S]*?(?:;|$)/i);
+    let sqlQuery = sqlMatch ? sqlMatch[0].replace(/```sql|```/g, "").trim() : "";
+
+    if (!sqlQuery) throw new Error("AI failed to generate a valid SQL query. Try being more specific.");
+
+    console.log("AI GENERATED SQL:", sqlQuery);
+
+    // Security check: Only allow SELECT and prevent common destructive commands
+    const forbidden = ["insert", "update", "delete", "drop", "truncate", "alter", "create", "grant", "revoke"];
+    const lowerSql = sqlQuery.toLowerCase();
+
+    if (forbidden.some(word => lowerSql.includes(word + " "))) {
+      throw new Error("Security Alert: Only SELECT queries are permitted.");
     }
+
+    // 2. Execute the AI's Query
+    const result = await db.execute(sql.raw(sqlQuery));
+
+    // postgres-js returns rows directly as the result object
+    const resultData = Array.isArray(result) ? result : (result as any).rows || result;
+
+    console.log("SQL RESULT DATA:", resultData);
+
+    // 3. AI Final Response
+    const finalPrompt = `
+      Answer this: "${query}"
+      Data result: ${JSON.stringify(resultData)}
+      
+      Instructions:
+      1. Explain clearly in INR (₹). 
+      2. Use markdown bolding for key figures.
+      3. If no data, explain that no records were found for that specific criteria.
+      4. Be concise but helpful.
+    `;
+    const finalAiResponse = await model.generateContent(finalPrompt);
+
+    return {
+      answer: finalAiResponse.response.text(),
+      data: resultData
+    };
+
   } catch (e: any) {
-    return { answer: `Sorry, I ran into an error: ${e.message}` };
+    console.error("SQL AI ERROR:", e);
+
+    // Handle Rate Limit (429) errors gracefully
+    if (e.message?.includes("429") || e.status === 429) {
+      const retryAfter = e.message?.match(/retry in ([\d.]+)s/i);
+      const waitTime = retryAfter ? `Please try again in about ${Math.ceil(parseFloat(retryAfter[1]))} seconds.` : "Please try again later today.";
+      return {
+        answer: `**AI Limit Reached**: You've hit the daily quota for the AI Analyst. ${waitTime}\n\n*Tip: The free tier allows 20 detailed analyses per day.*`
+      };
+    }
+
+    return { answer: `I encountered an error while analyzing the data: ${e.message || "Unknown error"}. Try rephrasing your question.` };
   }
 }

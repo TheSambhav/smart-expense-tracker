@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import {
   LineChart,
   Line,
@@ -12,6 +13,15 @@ import {
 } from "recharts";
 
 export function SpendingLineChart({ data }: { data: any[] }) {
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    const timer = setTimeout(() => setMounted(true), 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!mounted) return <div className="h-[400px] w-full bg-gray-900/50 rounded-xl animate-pulse" />;
+
   if (data.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 h-[400px] flex items-center justify-center">
@@ -23,10 +33,10 @@ export function SpendingLineChart({ data }: { data: any[] }) {
   const formatCurrency = (val: number) => `₹${(val / 1000).toFixed(0)}k`;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 h-[400px] shadow-sm">
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 h-[400px] shadow-sm overflow-hidden">
       <h3 className="text-lg font-semibold text-white mb-4">Spending vs Income</h3>
       <div className="h-[300px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
             <XAxis

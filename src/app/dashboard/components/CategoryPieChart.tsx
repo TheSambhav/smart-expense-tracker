@@ -1,8 +1,19 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 
 export function CategoryPieChart({ data }: { data: any[] }) {
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    // Add a tiny delay to ensure the container layout is stable
+    const timer = setTimeout(() => setMounted(true), 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!mounted) return <div className="h-[400px] w-full bg-gray-900/50 rounded-xl animate-pulse" />;
+
   if (data.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 h-[400px] flex items-center justify-center">
@@ -12,10 +23,10 @@ export function CategoryPieChart({ data }: { data: any[] }) {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 h-[400px] shadow-sm">
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 h-[400px] shadow-sm overflow-hidden">
       <h3 className="text-lg font-semibold text-white mb-4">Top Categories by Spend</h3>
       <div className="h-[300px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <PieChart>
             <Pie
               data={data}

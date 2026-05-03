@@ -84,6 +84,9 @@ export const transactions = pgTable('transactions', {
   userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
   categoryId: varchar('category_id').references(() => categories.id, { onDelete: 'set null' }),
   merchantId: varchar('merchant_id').references(() => merchants.id, { onDelete: 'set null' }),
+  transactionType: varchar('transaction_type'), // debit/credit
+  isRecurring: varchar('is_recurring'), // Yes/No
+  weekday: varchar('weekday'), // Monday, etc.
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
