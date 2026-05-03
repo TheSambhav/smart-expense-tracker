@@ -72,7 +72,10 @@ export async function importCsvData(formData: FormData) {
       type: row.transaction_type?.toLowerCase() === 'credit' ? 'INCOME' : 'EXPENSE',
       date: new Date(row.date),
       paymentMethod: row.payment_method || "",
-      description: row.description || ""
+      description: row.description || "",
+      transactionType: row.transaction_type || null,
+      isRecurring: row.is_recurring || "No",
+      weekday: row.weekday || null,
     });
   }
 
@@ -84,7 +87,7 @@ export async function importCsvData(formData: FormData) {
     const chunk = transactionsToInsert.slice(i, i + chunkSize);
     const result = await db.insert(transactions)
       .values(chunk)
-      .onConflictDoNothing({ target: transactions.externalId })
+      .onConflictDoNothing({ target: [transactions.userId, transactions.externalId] })
       .returning({ id: transactions.id });
     
     totalInserted += result.length;

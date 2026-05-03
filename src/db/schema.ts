@@ -74,7 +74,7 @@ export const merchants = pgTable('merchants', {
 
 export const transactions = pgTable('transactions', {
   id: varchar('id').$defaultFn(() => createId()).primaryKey(),
-  externalId: varchar('external_id').unique(),
+  externalId: varchar('external_id'),
   amount: decimal('amount', { precision: 12, scale: 2 }).notNull(),
   type: varchar('type', { enum: ['INCOME', 'EXPENSE'] }).notNull(),
   paymentMethod: varchar('payment_method'),
@@ -89,7 +89,9 @@ export const transactions = pgTable('transactions', {
   weekday: varchar('weekday'), // Monday, etc.
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  userExternalUnique: uniqueIndex('user_external_unique').on(table.userId, table.externalId),
+}));
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 
