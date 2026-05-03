@@ -90,7 +90,7 @@ export const transactions = pgTable('transactions', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  userExternalUnique: uniqueIndex('user_external_unique').on(table.userId, table.externalId),
+  userExternalUnique: unique().on(table.userId, table.externalId),
 }));
 
 // ─── Relations ────────────────────────────────────────────────────────────────
